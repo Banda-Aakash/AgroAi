@@ -115,6 +115,7 @@ def predict():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
 @app.route("/yield_predict", methods=["POST"])  # Changed to POST
 def yield_predict():
     try:
