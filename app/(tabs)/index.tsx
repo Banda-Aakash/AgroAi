@@ -5,10 +5,15 @@ import { Image } from "react-native";
 
 // Import screens
 import LoginScreen from "../Screens/LoginScreen";
-import OtpScreen from "../Screens/OtpScreen";
+import SignupScreen from "../Screens/SignupScreen";
+
+
 import HomeScreen from "../Screens/HomeScreen";
 import ProfileScreen from "../Screens/ProfileScreen";
 import SettingsScreen from "../Screens/SettingsScreen";
+import MarketplaceScreen from "../Screens/MarketplaceScreen";
+import CartScreen from "../Screens/CartScreen";
+import FarmerNotificationScreen from "../Screens/FarmerNotificationScreen";
 
 // Feature screens
 import MarketAccessScreen from "../Features/MarketAccessScreen";
@@ -25,7 +30,9 @@ import CropPredictionScreen from "../Features/CropPredictionScreen";
 // Define Stack Navigation for Login & OTP
 export type RootStackParamList = {
   Login: undefined;
-  Otp: { phoneNumber: string };
+  Signup: undefined;
+  Marker: undefined;
+  Cart:undefined;
   HomeTabs: undefined;
   MarketAccess: undefined;
   Chatbot: undefined;
@@ -38,6 +45,7 @@ export type RootStackParamList = {
   CropRecommendation: undefined;
   CropPrediction: undefined;
 };
+
 
 const Stack = createStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator();
@@ -66,7 +74,7 @@ const HomeTabs = () => {
       />
       <Tab.Screen
         name="Profile"
-        component={ProfileScreen}
+        component={MarketplaceScreen}
         options={{
           tabBarIcon: ({ focused }) => (
             <Image
@@ -78,7 +86,7 @@ const HomeTabs = () => {
       />
       <Tab.Screen
         name="Settings"
-        component={SettingsScreen}
+        component={FarmerNotificationScreen}
         options={{
           tabBarIcon: ({ focused }) => (
             <Image
@@ -96,14 +104,12 @@ const HomeTabs = () => {
 const App = () => {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      {/* Login and OTP screens */}
-      {/* <Stack.Screen name="Login" component={LoginScreen} />
-      <Stack.Screen name="Otp" component={OtpScreen} /> */}
+      {/* 👇 Auth Screens */}
+      <Stack.Screen name="Login" component={LoginScreen} />
+      <Stack.Screen name="Signup" component={SignupScreen} />
 
-      {/* HomeTabs will be the first screen after login */}
+      {/* 👇 Home and Feature Screens */}
       <Stack.Screen name="HomeTabs" component={HomeTabs} />
-
-      {/* Feature screens */}
       <Stack.Screen name="MarketAccess" component={MarketAccessScreen} />
       <Stack.Screen name="Chatbot" component={ChatbotScreen} />
       <Stack.Screen name="TaskManager" component={TaskManagerScreen} />
@@ -117,5 +123,6 @@ const App = () => {
     </Stack.Navigator>
   );
 };
+
 
 export default App;

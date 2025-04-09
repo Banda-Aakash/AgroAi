@@ -1,53 +1,77 @@
-// TaskManagerScreen.tsx
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { View, Text, TextInput, Button, StyleSheet, FlatList, TouchableOpacity, Alert } from "react-native";
+import * as Notifications from "expo-notifications";
+import * as Permissions from "expo-permissions";
+
+// Configure notification handler
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 interface Task {
   id: string;
   title: string;
   isCompleted: boolean;
+  reminderTime?: Date;
 }
 
 const TaskManagerScreen = () => {
   const [taskTitle, setTaskTitle] = useState<string>("");
   const [tasks, setTasks] = useState<Task[]>([]);
 
-  // Function to add a new task
-  const addTask = () => {
+  useEffect(() => {
+    // Request notification permissions
+    const requestPermissions = async () => {
+      const { status } = await Notifications.requestPermissionsAsync();
+      if (status !== "granted") {
+        alert("You need to enable notifications in settings.");
+      }
+    };
+    requestPermissions();
+  }, []);
+
+  // Function to add a new task with reminder
+  const addTask = async () => {
     if (!taskTitle.trim()) {
       Alert.alert("Error", "Please enter a task title.");
       return;
     }
-
+  
     const newTask: Task = {
       id: Date.now().toString(),
       title: taskTitle,
       isCompleted: false,
+      reminderTime: new Date(Date.now() + 60 * 1000), // Reminder after 1 minute
     };
-
+  
     setTasks([...tasks, newTask]);
-    setTaskTitle(""); // Clear input field
+    setTaskTitle("");
+  
+    // Calculate the trigger time (1 minute later)
+    const triggerTime = new Date();
+    triggerTime.setMinutes(triggerTime.getMinutes() + 1);
+  
+    // Schedule notification
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: "Task Reminder",
+        body: `Reminder for task: ${taskTitle}`,
+      },
+      trigger: { date: triggerTime }, // Trigger at a specific date-time (1 minute later)
+    });
+  
+    Alert.alert("Task Added", "Reminder set successfully for 1 minute later.");
   };
-
-  // Function to toggle task completion
-  const toggleTaskCompletion = (taskId: string) => {
-    setTasks((prevTasks) =>
-      prevTasks.map((task) =>
-        task.id === taskId ? { ...task, isCompleted: !task.isCompleted } : task
-      )
-    );
-  };
-
-  // Function to delete a task
-  const deleteTask = (taskId: string) => {
-    setTasks((prevTasks) => prevTasks.filter((task) => task.id !== taskId));
-  };
+  
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Task Manager</Text>
 
-      {/* Input field to add new tasks */}
       <TextInput
         value={taskTitle}
         onChangeText={setTaskTitle}
@@ -56,20 +80,11 @@ const TaskManagerScreen = () => {
       />
       <Button title="Add Task" onPress={addTask} />
 
-      {/* Task List */}
       <FlatList
         data={tasks}
         renderItem={({ item }) => (
           <View style={styles.taskContainer}>
-            <TouchableOpacity
-              style={[styles.task, item.isCompleted && styles.completedTask]}
-              onPress={() => toggleTaskCompletion(item.id)}
-            >
-              <Text style={styles.taskText}>{item.title}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => deleteTask(item.id)}>
-              <Text style={styles.deleteButton}>Delete</Text>
-            </TouchableOpacity>
+            <Text style={styles.taskText}>{item.title}</Text>
           </View>
         )}
         keyExtractor={(item) => item.id}
@@ -103,24 +118,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "#ddd",
     paddingBottom: 10,
-  },
-  task: {
-    flex: 1,
-    fontSize: 18,
-  },
-  completedTask: {
-    textDecorationLine: "line-through",
-    color: "gray",
   },
   taskText: {
     fontSize: 18,
-  },
-  deleteButton: {
-    color: "red",
-    fontWeight: "bold",
   },
 });
 
