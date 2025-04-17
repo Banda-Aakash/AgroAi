@@ -5,9 +5,351 @@ import google.generativeai as genai
 import pandas as pd
 import os
 from flask_cors import CORS
+import bcrypt
+import jwt
+import datetime
+from functools import wraps
+from pymongo import MongoClient
+from dotenv import load_dotenv
+from flask import request, jsonify
+from werkzeug.utils import secure_filename
+from io import BytesIO
+from gridfs import GridFS
+from bson.binary import Binary
+import base64
+from bson import ObjectId
+from flask import Response
+from datetime import datetime, timedelta
+
+
+# Setup environment variables
+load_dotenv()
+JWT_SECRET = os.getenv("JWT_SECRET")
+MONGODB_URI = os.getenv("MONGODB_URI")
 
 app = Flask(__name__)
 CORS(app)
+
+# MongoDB client setup
+client = MongoClient(MONGODB_URI)
+db = client['agroai']
+users_collection = db['users']
+notifications_collection = db['notifications']
+
+fs = GridFS(db)
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get('Authorization')
+        print("Received Token:", token)  # Debugging line
+        if not token:
+            return jsonify({'message': 'Token is missing!'}), 401
+        try:
+            token = token.split(" ")[1] if " " in token else token
+            print("Token after split:", token)  # Debugging line
+            data = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+            current_user = users_collection.find_one({"_id": ObjectId(data["user_id"])})
+            if not current_user:
+                print("User not found:", data["user_id"])  # Debugging line
+                raise Exception("User not found")
+        except Exception as e:
+            print("Error decoding token:", e)  # Debugging line
+            return jsonify({'message': 'Token is invalid or expired.', 'error': str(e)}), 401
+        return f(current_user, *args, **kwargs)
+    return decorated
+
+
+# Image upload route
+@app.route('/upload-image', methods=['POST'])
+@token_required
+def upload_image(current_user):
+    if 'image' not in request.files:
+        return jsonify({'error': 'No image part'}), 400
+    
+    file = request.files['image']
+    if file.filename == '':
+        return jsonify({'error': 'No selected image'}), 400
+    
+    try:
+        image_data = file.read()
+
+        # For small images (<16MB), store directly as Binary
+        if len(image_data) < 16 * 1024 * 1024:  # 16MB
+            image_binary = Binary(image_data)
+            image_doc = {
+                'user_id': current_user['_id'],
+                'image_data': image_binary,
+                'content_type': file.content_type,
+                'filename': secure_filename(file.filename),
+                'upload_date': datetime.datetime.utcnow()
+            }
+            image_id = db.images.insert_one(image_doc).inserted_id
+        else:
+            # For larger files, use GridFS
+            image_id = fs.put(image_data, 
+                            filename=secure_filename(file.filename),
+                            content_type=file.content_type,
+                            user_id=current_user['_id'])
+
+        return jsonify({
+            'imageId': str(image_id),
+            'message': 'Image uploaded successfully'
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+from bson import ObjectId  # Ensure you import ObjectId
+
+
+@app.route('/get-image', methods=['GET'])
+def get_image():
+    # Retrieve image_id from query parameters
+    image_id = request.args.get('image_id')
+    
+    if not image_id:
+        return jsonify({'error': 'Image ID is required'}), 400  # Handle missing image_id
+    
+    print(f"Received image_id: {image_id}")  # Debugging line
+    try:
+        # Convert the string image_id to ObjectId
+        image_id_obj = ObjectId(image_id)
+
+        # Fetch image data from the images collection
+        image_doc = db.images.find_one({'_id': image_id_obj})
+
+        if image_doc:
+            # Return image stored as Binary
+            return Response(image_doc['image_data'], mimetype=image_doc['content_type'])
+        
+        # If image not found in the collection, try GridFS (if necessary)
+        grid_out = fs.get(image_id_obj)
+        return Response(grid_out.read(), mimetype=grid_out.content_type)
+    
+    except Exception as e:
+        return jsonify({'error': 'Image not found or error fetching the image', 'message': str(e)}), 404
+
+# Crop addition route
+@app.route('/crops', methods=['POST'])
+@token_required
+def add_crop(current_user):
+    try:
+        data = request.get_json()
+
+        if not data.get("imageId"):
+            return jsonify({"error": "Image ID is required"}), 400
+
+        crop_data = {
+            "name": data["name"],
+            "price": data["price"],
+            "quantity": data["quantity"],
+            "user_id": current_user["_id"],
+            "image_id": data["imageId"],  # Reference to image
+            "created_at": datetime.datetime.utcnow()
+        }
+
+        result = db.crops.insert_one(crop_data)
+
+        return jsonify({
+            "message": "Crop added successfully",
+            "crop_id": str(result.inserted_id)
+        }), 201
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# Fetch crops route
+@app.route('/crops', methods=['GET'])
+@token_required
+def get_crops(current_user):
+    try:
+        crops = db.crops.find({"user_id": current_user["_id"]})  # Fetch crops for the user
+        crops_list = []
+
+        for crop in crops:
+            crop_data = {
+                "_id": str(crop["_id"]),
+                "name": crop["name"],
+                "price": crop["price"],
+                "quantity": crop["quantity"],
+                "image_id": str(crop["image_id"]),  # Reference to image
+                "user_id": str(crop["user_id"]),
+                "created_at": crop["created_at"]
+            }
+            crops_list.append(crop_data)
+        
+        return jsonify({"crops": crops_list}), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/checkout', methods=['POST'])
+@token_required
+def checkout(current_user):
+    data = request.get_json()
+    
+    # Log the received data
+    print("Received Data:", data)
+
+    cart_items = data.get('cartItems', [])
+    if not cart_items:
+        return jsonify({"error": "Cart is empty"}), 400
+
+    for item in cart_items:
+        print(item['userId'])
+        db.notifications.insert_one({
+            "toUserId": item['userId'],
+            "cropName": item['name'],
+            "quantity": item['quantity'],
+            "totalPrice": item['price'],
+            "buyerId": current_user['_id'],  # Use current_user['_id'] for buyer
+            "timestamp": datetime.utcnow()
+        })
+
+    return jsonify({"success": True})
+
+@app.route('/notifications', methods=['GET'])
+@token_required
+def get_notifications(current_user):
+    try:
+        print(current_user["_id"])
+        notifications = list(notifications_collection.find({"toUserId": str(current_user["_id"])}))
+        print(notifications)
+        notifications_list = []
+        
+        for notification in notifications:
+            notification_data = {
+                "_id": str(notification["_id"]),
+                "cropName": notification["cropName"],
+                "quantity": notification["quantity"],
+                "totalPrice": notification["totalPrice"],
+                "buyerId": str(notification["buyerId"]),
+                "status": notification.get("status", "pending"),
+                "timestamp": notification["timestamp"].strftime("%Y-%m-%d %H:%M:%S")  # Format timestamp
+            }
+            notifications_list.append(notification_data)
+            
+        print("hi")
+        print(notifications_list)
+
+        return jsonify({"notifications": notifications_list}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# Update the notification status (Accept/Reject)
+@app.route('/notifications/<notification_id>', methods=['PATCH'])
+@token_required
+def update_notification_status(current_user, notification_id):
+    try:
+        status = request.json.get('status')
+        if status not in ['accepted', 'rejected']:
+            return jsonify({'error': 'Invalid status'}), 400
+
+        # Update the notification in the MongoDB collection
+        result = notifications_collection.update_one(
+            {"_id": ObjectId(notification_id), "toUserId": current_user["_id"]},
+            {"$set": {"status": status}}
+        )
+
+        if result.matched_count == 0:
+            return jsonify({'error': 'Notification not found or user not authorized'}), 404
+
+        return jsonify({'message': 'Notification status updated successfully'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+
+
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    name = data.get('name')
+    email = data.get('email')
+    password = data.get('password')
+
+    if users_collection.find_one({'email': email}):
+        return jsonify({'message': 'User already exists'}), 409
+
+    hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+    user = {
+        'name': name,
+        'email': email,
+        'password': hashed_pw
+    }
+    inserted = users_collection.insert_one(user)
+    return jsonify({'message': 'User registered successfully', 'user_id': str(inserted.inserted_id)})
+
+@app.route('/login', methods=['POST'])
+def login():
+    # Verify content type first
+    if not request.is_json:
+        return jsonify({
+            'message': 'Invalid content type',
+            'error': 'Request must be application/json'
+        }), 400
+
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        if not data or 'email' not in data or 'password' not in data:
+            return jsonify({
+                'message': 'Missing required fields',
+                'error': 'Both email and password are required'
+            }), 400
+
+        email = data['email'].strip().lower()  # Normalize email
+        password = data['password']
+
+        # Find user (case-insensitive email search)
+        user = users_collection.find_one({'email': {'$regex': f'^{email}$', '$options': 'i'}})
+        
+        if not user:
+            # Don't reveal whether email exists for security
+            return jsonify({
+                'message': 'Authentication failed',
+                'error': 'Invalid email or password'
+            }), 401
+
+        # Verify password
+        if not bcrypt.checkpw(password.encode('utf-8'), user['password']):
+            return jsonify({
+                'message': 'Authentication failed',
+                'error': 'Invalid email or password'
+            }), 401
+
+        # Generate JWT token
+        token = jwt.encode({
+            'user_id': str(user['_id']),
+            'exp': datetime.utcnow() + timedelta(days=30)
+        }, JWT_SECRET, algorithm='HS256')
+
+        # Secure response
+        response = jsonify({
+            'message': 'Login successful',
+            'token': token,
+            'user_id': str(user['_id'])
+        })
+        
+        # Set headers
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['Cache-Control'] = 'no-store'
+        
+        return response
+
+    except jwt.PyJWTError as e:
+        return jsonify({
+            'message': 'Token generation failed',
+            'error': str(e)
+        }), 500
+        
+    except Exception as e:
+        return jsonify({
+            'message': 'Server error',
+            'error': str(e)
+        }), 500
 
 # Configure Generative AI model
 API_KEY = "AIzaSyBOxLw8oGJMC_6vJU1-A4zwiPkRCijlCZM"
@@ -219,10 +561,6 @@ def fertilizer_predict():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-if __name__ == "__main__":
-    app.run(debug=True)
-
-
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -242,4 +580,3 @@ def chat():
 if __name__ == "__main__":
     # app.run(debug=True, host="0.0.0.0", port=5000)
     app.run(host="127.0.0.1", port=5000)
-

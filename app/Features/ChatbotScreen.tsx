@@ -12,6 +12,10 @@ import {
   Dimensions,
 } from "react-native";
 
+import Constants from 'expo-constants';
+
+const apiUrl = Constants.expoConfig?.extra?.API_URL || '';
+
 // Get the screen width and height for responsiveness
 const { width, height } = Dimensions.get("window");
 
@@ -30,7 +34,7 @@ const ChatbotScreen = () => {
 
     try {
       const response = await fetch(
-        "https://c117-2405-201-c011-a820-adcd-a56d-838b-763c.ngrok-free.app/chat",
+        `${apiUrl}/chat`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

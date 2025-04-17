@@ -1,6 +1,10 @@
 import React, { useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from "react-native";
 
+import Constants from 'expo-constants';
+
+const apiUrl = Constants.expoConfig?.extra?.API_URL || '';
+
 const CropRecommendationScreen = () => {
   const [formData, setFormData] = useState({
     N: "",
@@ -23,7 +27,7 @@ const CropRecommendationScreen = () => {
   const handleSubmit = async () => {
     console.log("hi")
     try {
-      const response = await fetch("https://8a6e-2405-201-c011-a820-494d-d21b-8b6d-44da.ngrok-free.app/predict", {
+      const response = await fetch(`${apiUrl}/predict`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

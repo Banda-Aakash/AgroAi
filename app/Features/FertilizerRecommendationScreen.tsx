@@ -3,6 +3,10 @@ import { View, Text, TextInput, Button, Alert, ScrollView, StyleSheet } from 're
 import { Picker } from '@react-native-picker/picker';
 import axios from 'axios';
 
+import Constants from 'expo-constants';
+
+const apiUrl = Constants.expoConfig?.extra?.API_URL || '';
+
 const FertilizerRecommendationScreen = () => {
     const [inputs, setInputs] = useState({
         temperature: '',
@@ -29,7 +33,7 @@ const FertilizerRecommendationScreen = () => {
 
     const handleSubmit = async () => {
         try {
-            const response = await axios.post('https://f7cf-2405-201-c011-a820-f069-fb96-b8b9-c3bb.ngrok-free.app/fertilizer_predict', {
+            const response = await axios.post(`${apiUrl}/fertilizer_predict`, {
                 temperature: parseFloat(inputs.temperature),
                 humidity: parseFloat(inputs.humidity),
                 moisture: parseFloat(inputs.moisture),

@@ -1,6 +1,10 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 
+import Constants from 'expo-constants';
+
+const apiUrl = Constants.expoConfig?.extra?.API_URL || '';
+
 const CropPredictionScreen = () => {
   return (
     <View style={styles.container}>

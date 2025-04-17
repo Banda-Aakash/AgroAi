@@ -2,6 +2,9 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, Button, Alert, ScrollView, StyleSheet, ActivityIndicator } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import axios from 'axios';
+import Constants from 'expo-constants';
+
+const apiUrl = Constants.expoConfig?.extra?.API_URL || '';
 
 const YieldPredictionScreen = () => {
   const [inputs, setInputs] = useState({
@@ -43,7 +46,7 @@ const YieldPredictionScreen = () => {
   
     try {
       const response = await axios.post(
-        'https://f7cf-2405-201-c011-a820-f069-fb96-b8b9-c3bb.ngrok-free.app/yield_predict',
+        `${apiUrl}/yield_predict`,
         {
           Crop: inputs.crop,
           Crop_Year: Number(inputs.cropYear),  // Convert to number
