@@ -81,10 +81,10 @@ export default function MarketplaceScreen() {
     };
 
     updateColumns(); // Initial column setup
-    Dimensions.addEventListener('change', updateColumns); // Listen for screen resizing
+    const subscription = Dimensions.addEventListener('change', updateColumns); // Listen for screen resizing
 
     return () => {
-      Dimensions.removeEventListener('change', updateColumns); // Cleanup listener
+      subscription.remove(); // Cleanup listener
     };
   }, []);
 

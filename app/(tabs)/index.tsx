@@ -73,24 +73,24 @@ const HomeTabs = () => {
         }}
       />
       <Tab.Screen
-        name="Profile"
-        component={MarketplaceScreen}
+        name="Notifications"
+        component={FarmerNotificationScreen}
         options={{
           tabBarIcon: ({ focused }) => (
             <Image
-              source={require("../assets/profile-icon.jpg")}
+              source={require("../assets/notification.jpg")}
               style={{ width: 24, height: 24 }}
             />
           ),
         }}
       />
       <Tab.Screen
-        name="Settings"
-        component={FarmerNotificationScreen}
+        name="Profile"
+        component={ProfileScreen}
         options={{
           tabBarIcon: ({ focused }) => (
             <Image
-              source={require("../assets/settings-icon.png")}
+              source={require("../assets/profile-icon.jpg")}
               style={{ width: 24, height: 24 }}
             />
           ),

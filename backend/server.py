@@ -7,7 +7,6 @@ import os
 from flask_cors import CORS
 import bcrypt
 import jwt
-import datetime
 from functools import wraps
 from pymongo import MongoClient
 from dotenv import load_dotenv
@@ -20,7 +19,7 @@ import base64
 from bson import ObjectId
 from flask import Response
 from datetime import datetime, timedelta
-
+import time
 
 # Setup environment variables
 load_dotenv()
@@ -33,6 +32,7 @@ CORS(app)
 # MongoDB client setup
 client = MongoClient(MONGODB_URI)
 db = client['agroai']
+image_collection= db['images']
 users_collection = db['users']
 notifications_collection = db['notifications']
 
@@ -60,7 +60,103 @@ def token_required(f):
     return decorated
 
 
-# Image upload route
+
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    name = data.get('name')
+    email = data.get('email')
+    password = data.get('password')
+
+    if users_collection.find_one({'email': email}):
+        return jsonify({'message': 'User already exists'}), 409
+
+    hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+    user = {
+        'name': name,
+        'email': email,
+        'password': hashed_pw
+    }
+    inserted = users_collection.insert_one(user)
+    return jsonify({'message': 'User registered successfully', 'user_id': str(inserted.inserted_id)})
+
+
+@app.route('/login', methods=['POST'])
+def login():
+    # Verify content type first
+    if not request.is_json:
+        return jsonify({
+            'message': 'Invalid content type',
+            'error': 'Request must be application/json'
+        }), 400
+
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        if not data or 'email' not in data or 'password' not in data:
+            return jsonify({
+                'message': 'Missing required fields',
+                'error': 'Both email and password are required'
+            }), 400
+
+        email = data['email'].strip().lower()  # Normalize email
+        password = data['password']
+
+        # Find user (case-insensitive email search)
+        user = users_collection.find_one({'email': {'$regex': f'^{email}$', '$options': 'i'}})
+        
+        if not user:
+            # Don't reveal whether email exists for security
+            return jsonify({
+                'message': 'Authentication failed',
+                'error': 'Invalid email or password'
+            }), 401
+
+        # Verify password
+        if not bcrypt.checkpw(password.encode('utf-8'), user['password']):
+            return jsonify({
+                'message': 'Authentication failed',
+                'error': 'Invalid email or password'
+            }), 401
+            
+            
+        expiration_time = int(time.time()) + 2592000
+        # Generate JWT token
+        token = jwt.encode({
+            'user_id': str(user['_id']),
+            'exp': expiration_time
+        }, JWT_SECRET, algorithm='HS256')
+
+        # Secure response
+        response = jsonify({
+            'message': 'Login successful',
+            'token': token,
+            'user_id': str(user['_id'])
+        })
+        
+        # Set headers
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['Cache-Control'] = 'no-store'
+        
+        return response
+
+    except jwt.PyJWTError as e:
+        return jsonify({
+            'message': 'Token generation failed',
+            'error': str(e)
+        }), 500
+        
+    except Exception as e:
+        return jsonify({
+            'message': 'Server error',
+            'error': str(e)
+        }), 500
+
+
+
+import datetime
+
 @app.route('/upload-image', methods=['POST'])
 @token_required
 def upload_image(current_user):
@@ -72,11 +168,12 @@ def upload_image(current_user):
         return jsonify({'error': 'No selected image'}), 400
     
     try:
-        image_data = file.read()
-
-        # For small images (<16MB), store directly as Binary
-        if len(image_data) < 16 * 1024 * 1024:  # 16MB
+        if len(file.read()) < 16 * 1024 * 1024:
+            # Read and save the small image
+            file.seek(0)  # Reset file pointer after reading
+            image_data = file.read()
             image_binary = Binary(image_data)
+            
             image_doc = {
                 'user_id': current_user['_id'],
                 'image_data': image_binary,
@@ -84,22 +181,25 @@ def upload_image(current_user):
                 'filename': secure_filename(file.filename),
                 'upload_date': datetime.datetime.utcnow()
             }
+
             image_id = db.images.insert_one(image_doc).inserted_id
         else:
-            # For larger files, use GridFS
-            image_id = fs.put(image_data, 
-                            filename=secure_filename(file.filename),
-                            content_type=file.content_type,
-                            user_id=current_user['_id'])
-
+            # Use GridFS for large files
+            file.seek(0)
+            image_id = fs.put(file, 
+                              filename=secure_filename(file.filename),
+                              content_type=file.content_type,
+                              user_id=current_user['_id'])
+        
         return jsonify({
             'imageId': str(image_id),
             'message': 'Image uploaded successfully'
         }), 200
         
     except Exception as e:
+        print(f"Error during image upload: {str(e)}")
         return jsonify({'error': str(e)}), 500
-from bson import ObjectId  # Ensure you import ObjectId
+
 
 
 @app.route('/get-image', methods=['GET'])
@@ -198,12 +298,14 @@ def checkout(current_user):
     for item in cart_items:
         print(item['userId'])
         db.notifications.insert_one({
+            "image_id": item['image_id'],
             "toUserId": item['userId'],
             "cropName": item['name'],
             "quantity": item['quantity'],
             "totalPrice": item['price'],
-            "buyerId": current_user['_id'],  # Use current_user['_id'] for buyer
-            "timestamp": datetime.utcnow()
+            "buyerId": current_user['_id'],  
+            "timestamp": datetime.datetime.utcnow(),
+            "status": "pending"
         })
 
     return jsonify({"success": True})
@@ -219,6 +321,7 @@ def get_notifications(current_user):
         
         for notification in notifications:
             notification_data = {
+                "image_id":str(notification["image_id"]),
                 "_id": str(notification["_id"]),
                 "cropName": notification["cropName"],
                 "quantity": notification["quantity"],
@@ -238,17 +341,19 @@ def get_notifications(current_user):
 
 
 # Update the notification status (Accept/Reject)
-@app.route('/notifications/<notification_id>', methods=['PATCH'])
+@app.route('/notifications/<notification_id>', methods=['POST'])
 @token_required
 def update_notification_status(current_user, notification_id):
     try:
+        print(notification_id)
         status = request.json.get('status')
+        print(status)
         if status not in ['accepted', 'rejected']:
             return jsonify({'error': 'Invalid status'}), 400
 
         # Update the notification in the MongoDB collection
         result = notifications_collection.update_one(
-            {"_id": ObjectId(notification_id), "toUserId": current_user["_id"]},
+            {"_id": ObjectId(notification_id), "toUserId": str(current_user["_id"])},
             {"$set": {"status": status}}
         )
 
@@ -258,98 +363,8 @@ def update_notification_status(current_user, notification_id):
         return jsonify({'message': 'Notification status updated successfully'}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-
-
-
-@app.route('/register', methods=['POST'])
-def register():
-    data = request.get_json()
-    name = data.get('name')
-    email = data.get('email')
-    password = data.get('password')
-
-    if users_collection.find_one({'email': email}):
-        return jsonify({'message': 'User already exists'}), 409
-
-    hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-    user = {
-        'name': name,
-        'email': email,
-        'password': hashed_pw
-    }
-    inserted = users_collection.insert_one(user)
-    return jsonify({'message': 'User registered successfully', 'user_id': str(inserted.inserted_id)})
-
-@app.route('/login', methods=['POST'])
-def login():
-    # Verify content type first
-    if not request.is_json:
-        return jsonify({
-            'message': 'Invalid content type',
-            'error': 'Request must be application/json'
-        }), 400
-
-    try:
-        data = request.get_json()
-        
-        # Validate required fields
-        if not data or 'email' not in data or 'password' not in data:
-            return jsonify({
-                'message': 'Missing required fields',
-                'error': 'Both email and password are required'
-            }), 400
-
-        email = data['email'].strip().lower()  # Normalize email
-        password = data['password']
-
-        # Find user (case-insensitive email search)
-        user = users_collection.find_one({'email': {'$regex': f'^{email}$', '$options': 'i'}})
-        
-        if not user:
-            # Don't reveal whether email exists for security
-            return jsonify({
-                'message': 'Authentication failed',
-                'error': 'Invalid email or password'
-            }), 401
-
-        # Verify password
-        if not bcrypt.checkpw(password.encode('utf-8'), user['password']):
-            return jsonify({
-                'message': 'Authentication failed',
-                'error': 'Invalid email or password'
-            }), 401
-
-        # Generate JWT token
-        token = jwt.encode({
-            'user_id': str(user['_id']),
-            'exp': datetime.utcnow() + timedelta(days=30)
-        }, JWT_SECRET, algorithm='HS256')
-
-        # Secure response
-        response = jsonify({
-            'message': 'Login successful',
-            'token': token,
-            'user_id': str(user['_id'])
-        })
-        
-        # Set headers
-        response.headers['Content-Type'] = 'application/json'
-        response.headers['Cache-Control'] = 'no-store'
-        
-        return response
-
-    except jwt.PyJWTError as e:
-        return jsonify({
-            'message': 'Token generation failed',
-            'error': str(e)
-        }), 500
-        
-    except Exception as e:
-        return jsonify({
-            'message': 'Server error',
-            'error': str(e)
-        }), 500
+    
+    
 
 # Configure Generative AI model
 API_KEY = "AIzaSyBOxLw8oGJMC_6vJU1-A4zwiPkRCijlCZM"
